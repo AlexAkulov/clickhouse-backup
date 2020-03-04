@@ -1,6 +1,7 @@
 package chbackup
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 	"time"
 
 	_ "github.com/ClickHouse/clickhouse-go"
+	"github.com/btcsuite/btcutil/base58"
 	"github.com/jmoiron/sqlx"
 )
 
@@ -175,16 +177,25 @@ func (ch *ClickHouse) FreezeTableOldWay(table Table) error {
 
 // FreezeTable - freeze all partitions for table
 // This way available for ClickHouse sience v19.1
-func (ch *ClickHouse) FreezeTable(table Table) error {
+func (ch *ClickHouse) FreezeTable(table Table, name string) error {
+	var query string
+
 	version, err := ch.GetVersion()
 	if err != nil {
 		return err
 	}
-	if version < 19001005 {
+	log.Printf("version: %v\n", version)
+	log.Printf("Freeze `%s`.`%s` with '%s'\n", table.Database, table.Name, name)
+	//if version < 19001005 {
+	if version < 19010001 { // 19.10
 		return ch.FreezeTableOldWay(table)
 	}
-	log.Printf("Freeze `%s`.`%s`", table.Database, table.Name)
-	query := fmt.Sprintf("ALTER TABLE `%v`.`%v` FREEZE;", table.Database, table.Name)
+	switch {
+	case len(name) == 0:
+		query = fmt.Sprintf("ALTER TABLE `%v`.`%v` FREEZE;", table.Database, table.Name)
+	default:
+		query = fmt.Sprintf("ALTER TABLE `%v`.`%v` FREEZE WITH NAME '%v';", table.Database, table.Name, base58.Encode([]byte(name)))
+	}
 	if _, err := ch.conn.Exec(query); err != nil {
 		return fmt.Errorf("can't freeze `%s`.`%s` with: %v", table.Database, table.Name, err)
 	}
@@ -326,6 +337,28 @@ func (ch *ClickHouse) CopyData(table BackupTable) error {
 		}
 	}
 	return nil
+}
+
+func (ch *ClickHouse) CheckData(table BackupTable) error {
+	version, err := ch.GetVersion()
+	if err != nil {
+		return err
+	}
+	if version < 19010001 { // 19.10
+		return nil
+	}
+	var ok []bool
+	log.Printf("Check table `%s`.`%s`\n", table.Database, table.Name)
+	query := fmt.Sprintf("CHECK TABLE `%s`.`%s`", table.Database, table.Name)
+	err = ch.conn.Select(&ok, query)
+	switch {
+	case err != nil:
+		return err
+	case ok[0] != true:
+		return errors.New("the data in the table is corrupted")
+	default:
+		return nil
+	}
 }
 
 // AttachPatritions - execute ATTACH command for specific table

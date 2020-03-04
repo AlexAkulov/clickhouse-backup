@@ -3,6 +3,7 @@ package chbackup
 import (
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/url"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/btcsuite/btcutil/base58"
 	"github.com/mholt/archiver"
 )
 
@@ -62,26 +64,65 @@ func isClickhouseShadow(path string) bool {
 	return true
 }
 
-func moveShadow(shadowPath, backupPath string) error {
+func moveShadow(shadowPath, backupPath, backupName string, version int) error {
+	switch {
+	case version < 19010001: // 19.10
+		break
+	case len(backupName) == 0:
+		data, err := ioutil.ReadFile(fmt.Sprintf("%s%c%s", shadowPath, os.PathSeparator, "increment.txt"))
+		if err != nil {
+			return err
+		}
+		data = data[:len(data)-1]
+		idx, err := strconv.Atoi(string(data))
+		if err != nil {
+			return err
+		}
+		shadowPath = fmt.Sprintf("%s%c%d", shadowPath, os.PathSeparator, idx)
+	default:
+		shadowPath = fmt.Sprintf("%s%c%s", shadowPath, os.PathSeparator, base58.Encode([]byte(backupName)))
+	}
 	if err := filepath.Walk(shadowPath, func(filePath string, info os.FileInfo, err error) error {
-		relativePath := strings.Trim(strings.TrimPrefix(filePath, shadowPath), "/")
-		pathParts := strings.SplitN(relativePath, "/", 3)
-		if len(pathParts) != 3 {
-			return nil
+		switch {
+		case version < 19010001:
+			relativePath := strings.Trim(strings.TrimPrefix(filePath, shadowPath), "/")
+			pathParts := strings.SplitN(relativePath, "/", 3)
+			if len(pathParts) != 3 {
+				return nil
+			}
+			dstFilePath := filepath.Join(backupPath, pathParts[2])
+			if info.IsDir() {
+				return os.MkdirAll(dstFilePath, os.ModePerm)
+			}
+			if !info.Mode().IsRegular() {
+				log.Printf("'%s' is not a regular file, skipping", filePath)
+				return nil
+			}
+			return os.Rename(filePath, dstFilePath)
+		default:
+			relativePath := strings.Trim(strings.TrimPrefix(filePath, shadowPath), "/")
+			pathParts := strings.SplitN(relativePath, "/", 2)
+			if len(pathParts) != 2 {
+				return nil
+			}
+			dstFilePath := filepath.Join(backupPath, pathParts[1])
+			if info.IsDir() {
+				return os.MkdirAll(dstFilePath, os.ModePerm)
+			}
+			if !info.Mode().IsRegular() {
+				log.Printf("'%s' is not a regular file, skipping", filePath)
+				return nil
+			}
+			return os.Rename(filePath, dstFilePath)
 		}
-		dstFilePath := filepath.Join(backupPath, pathParts[2])
-		if info.IsDir() {
-			return os.MkdirAll(dstFilePath, os.ModePerm)
-		}
-		if !info.Mode().IsRegular() {
-			log.Printf("'%s' is not a regular file, skipping", filePath)
-			return nil
-		}
-		return os.Rename(filePath, dstFilePath)
 	}); err != nil {
 		return err
 	}
-	return cleanDir(shadowPath)
+	err := cleanDir(shadowPath)
+	if version >= 19010001 {
+		err = os.RemoveAll(shadowPath)
+	}
+	return err
 }
 
 func copyFile(srcFile string, dstFile string) error {

@@ -305,7 +305,7 @@ func PrintRemoteBackups(config Config, format string) error {
 }
 
 // Freeze - freeze tables by tablePattern
-func Freeze(config Config, tablePattern string) error {
+func Freeze(config Config, tablePattern, name string) error {
 	ch := &ClickHouse{
 		Config: &config.ClickHouse,
 	}
@@ -320,15 +320,12 @@ func Freeze(config Config, tablePattern string) error {
 	}
 
 	shadowPath := filepath.Join(dataPath, "shadow")
-	files, err := ioutil.ReadDir(shadowPath)
+	_, err = ioutil.ReadDir(shadowPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return fmt.Errorf("can't read %s directory: %v", shadowPath, err)
 		}
-	} else if len(files) > 0 {
-		return fmt.Errorf("'%s' is not empty, execute 'clean' command first", shadowPath)
 	}
-
 	allTables, err := ch.GetTables()
 	if err != nil {
 		return fmt.Errorf("can't get Clickhouse tables with: %v", err)
@@ -342,7 +339,7 @@ func Freeze(config Config, tablePattern string) error {
 			log.Printf("Skip `%s`.`%s`", table.Database, table.Name)
 			continue
 		}
-		if err := ch.FreezeTable(table); err != nil {
+		if err := ch.FreezeTable(table, name); err != nil {
 			return err
 		}
 	}
@@ -357,6 +354,18 @@ func NewBackupName() string {
 // CreateBackup - create new backup of all tables matched by tablePattern
 // If backupName is empty string will use default backup name
 func CreateBackup(config Config, backupName, tablePattern string) error {
+	ch := &ClickHouse{
+		Config: &config.ClickHouse,
+	}
+	if err := ch.Connect(); err != nil {
+		return fmt.Errorf("can't connect to clickouse with: %v", err)
+	}
+	version, err := ch.GetVersion()
+	if err != nil {
+		ch.Close()
+		return err
+	}
+	ch.Close()
 	if backupName == "" {
 		backupName = NewBackupName()
 	}
@@ -372,7 +381,7 @@ func CreateBackup(config Config, backupName, tablePattern string) error {
 		return fmt.Errorf("can't create backup with %v", err)
 	}
 	log.Printf("Create backup '%s'", backupName)
-	if err := Freeze(config, tablePattern); err != nil {
+	if err := Freeze(config, tablePattern, backupName); err != nil {
 		return err
 	}
 	log.Println("Copy metadata")
@@ -405,7 +414,7 @@ func CreateBackup(config Config, backupName, tablePattern string) error {
 		return err
 	}
 	shadowDir := path.Join(dataPath, "shadow")
-	if err := moveShadow(shadowDir, backupShadowDir); err != nil {
+	if err := moveShadow(shadowDir, backupShadowDir, backupName, version); err != nil {
 		return err
 	}
 	if err := RemoveOldBackupsLocal(config); err != nil {
@@ -485,6 +494,9 @@ func RestoreData(config Config, backupName string, tablePattern string) error {
 		}
 		if err := ch.AttachPatritions(table); err != nil {
 			return fmt.Errorf("can't attach partitions for table '%s.%s' with %v", table.Database, table.Name, err)
+		}
+		if err := ch.CheckData(table); err != nil {
+			return fmt.Errorf("data in the '%s' is corrupted with %v", table.Database, err)
 		}
 	}
 	return nil

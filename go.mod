@@ -6,12 +6,13 @@ require (
 	github.com/ClickHouse/clickhouse-go v1.3.12
 	github.com/andybalholm/brotli v1.0.0 // indirect
 	github.com/aws/aws-sdk-go v1.25.48
+	github.com/btcsuite/btcutil v0.0.0-20191219182022-e17c9730c422
 	github.com/cpuguy83/go-md2man/v2 v2.0.0 // indirect
-	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/djherbis/buffer v1.1.0 // indirect
 	github.com/fatih/color v1.7.0 // indirect
 	github.com/frankban/quicktest v1.5.0 // indirect
 	github.com/golang/groupcache v0.0.0-20191027212112-611e8accdfc9 // indirect
+	github.com/infinivision/gaeadb v0.0.0-20191224012113-d4277921708d // indirect
 	github.com/jmoiron/sqlx v1.2.0
 	github.com/jstemmer/go-junit-report v0.9.1 // indirect
 	github.com/kelseyhightower/envconfig v1.4.0
@@ -29,7 +30,6 @@ require (
 	golang.org/x/lint v0.0.0-20191125180803-fdd1cda4f05f // indirect
 	golang.org/x/net v0.0.0-20191204025024-5ee1b9f4859a // indirect
 	golang.org/x/oauth2 v0.0.0-20191202225959-858c2ad4c8b6 // indirect
-	golang.org/x/sys v0.0.0-20191204072324-ce4227a45e2e // indirect
 	golang.org/x/tools v0.0.0-20191205012623-e84277c2c008 // indirect
 	google.golang.org/api v0.14.0
 	google.golang.org/appengine v1.6.5 // indirect

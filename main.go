@@ -185,7 +185,7 @@ func main() {
 			UsageText:   "clickhouse-backup freeze [-t, --tables=<db>.<table>] <backup_name>",
 			Description: "Freeze tables",
 			Action: func(c *cli.Context) error {
-				return chbackup.Freeze(*getConfig(c), c.String("t"))
+				return chbackup.Freeze(*getConfig(c), c.String("t"), c.Args().Get(1))
 			},
 			Flags: append(cliapp.Flags,
 				cli.StringFlag{
