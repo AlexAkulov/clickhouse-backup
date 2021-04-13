@@ -22,8 +22,9 @@ import (
 
 const (
 	// BackupTimeFormat - default backup name format
-	BackupTimeFormat = "2006-01-02T15-04-05"
-	hashfile         = "parts.hash"
+	BackupTimeFormat                     = "2006-01-02T15-04-05"
+	hashfile                             = "parts.hash"
+	flashbackAvailableSinceChVersion int = 19150306
 )
 
 var (
@@ -175,7 +176,7 @@ func parseSchemaPattern(metadataPath string, tablePattern string) (RestoreTables
 	return result, nil
 }
 
-// getTables - get all tables for use by PrintTables and API
+// GetTables - get all tables for use by PrintTables and API
 func GetTables(cfg config.Config) ([]clickhouse.Table, error) {
 	ch := &clickhouse.ClickHouse{
 		Config: &cfg.ClickHouse,
@@ -552,18 +553,25 @@ func Restore(cfg config.Config, backupName string, tablePattern string, schemaOn
 
 // Flashback - restore tables matched by tablePattern from backupName by restroing only modified parts.
 func Flashback(cfg config.Config, backupName string, tablePattern string) error {
-	/*if schemaOnly || (schemaOnly == dataOnly) {
-		err := restoreSchema(config, backupName, tablePattern)
-		if err != nil {
-			return err
-		}
+	ch := &clickhouse.ClickHouse{
+		Config: &cfg.ClickHouse,
 	}
-	if dataOnly || (schemaOnly == dataOnly) {
-		err := RestoreData(config, backupName, tablePattern)
-		if err != nil {
-			return err
-		}
-	}*/
+	if errc := ch.Connect(); errc != nil {
+		return fmt.Errorf("can't connect to clickhouse: %v", errc)
+	}
+
+	version, errgv := ch.GetVersion()
+	if errgv != nil {
+		return errgv
+	}
+
+	log.Printf("Database Version  = %v", version)
+	log.Printf("flashbackAvailableSinceChVersion = %v", flashbackAvailableSinceChVersion)
+
+	if version < flashbackAvailableSinceChVersion {
+		errv := fmt.Errorf("Flashback feature is only avalaible for clickhouse version >= %v", flashbackAvailableSinceChVersion)
+		return errv
+	}
 
 	err := FlashBackData(cfg, backupName, tablePattern)
 	if err != nil {

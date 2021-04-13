@@ -31,4 +31,3 @@ jobs:
         env:
           CLICKHOUSE_VERSION: ${{ matrix.clickhouse }}
         run: echo "CLICKHOUSE_VERSION=${CLICKHOUSE_VERSION}"
-

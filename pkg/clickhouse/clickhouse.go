@@ -19,6 +19,10 @@ import (
 	"github.com/jmoiron/sqlx"
 )
 
+const (
+	flashbackAvailableSinceChVersion int = 19150306
+)
+
 // ClickHouse - provide
 type ClickHouse struct {
 	Config *config.ClickHouseConfig
@@ -171,8 +175,20 @@ func (ch *ClickHouse) GetTables() ([]Table, error) {
 // GetPartitions - return slice of all partitions for a table
 func (ch *ClickHouse) GetPartitions(table Table) ([]Partition, error) {
 	partitions := make([]Partition, 0)
-	if err := ch.conn.Select(&partitions, fmt.Sprintf("select partition, name, path, active, hash_of_all_files,hash_of_uncompressed_files,uncompressed_hash_of_compressed_files from system.parts where database='%s' and table='%s';", table.Database, table.Name)); err != nil {
-		return nil, err
+
+	ver, errgv := ch.GetVersion()
+	if errgv != nil {
+		return nil, errgv
+	}
+
+	if ver >= flashbackAvailableSinceChVersion {
+		if err := ch.conn.Select(&partitions, fmt.Sprintf("select partition, name, path, active, hash_of_all_files,hash_of_uncompressed_files,uncompressed_hash_of_compressed_files from system.parts where database='%s' and table='%s';", table.Database, table.Name)); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := ch.conn.Select(&partitions, fmt.Sprintf("select partition, name, path, active from system.parts where database='%s' and table='%s';", table.Database, table.Name)); err != nil {
+			return nil, err
+		}
 	}
 
 	return partitions, nil
@@ -230,7 +246,7 @@ func (ch *ClickHouse) FreezeTable(table Table) error {
 	if err != nil {
 		return err
 	}
-	if version < 19001005 || ch.Config.FreezeByPart {
+	if version < 19001005 {
 		return ch.FreezeTableOldWay(table)
 	}
 	if strings.HasPrefix(table.Engine, "Replicated") && ch.Config.SyncReplicatedTables {
@@ -552,11 +568,11 @@ func (ch *ClickHouse) ApplyPartitionsChanges(table PartDiff) error {
 		}
 
 		for partname := range partList {
-			/*if partname == "all" {
-				query = fmt.Sprintf("DETACH TABLE `%s`.`%s`", table.btable.Database, table.btable.Name)
-			} else {*/
-			query = fmt.Sprintf("ALTER TABLE `%s`.`%s` DETACH PARTITION %s", table.BTable.Database, table.BTable.Name, partname)
-			//}
+			if partname != "tuple()" {
+				query = fmt.Sprintf("ALTER TABLE `%s`.`%s` DETACH PARTITION '%s'", table.BTable.Database, table.BTable.Name, partname)
+			} else {
+				query = fmt.Sprintf("ALTER TABLE `%s`.`%s` DETACH PARTITION %s", table.BTable.Database, table.BTable.Name, partname)
+			}
 			log.Println(query)
 			if _, err := ch.conn.Exec(query); err != nil {
 				return err
@@ -578,23 +594,17 @@ func (ch *ClickHouse) ApplyPartitionsChanges(table PartDiff) error {
 			if partname == "all" {
 				query = fmt.Sprintf("ATTACH TABLE `%s`.`%s`", table.BTable.Database, table.BTable.Name)
 			} else {
-				query = fmt.Sprintf("ALTER TABLE `%s`.`%s` ATTACH PARTITION %s", table.BTable.Database, table.BTable.Name, partname)
+				if partname != "tuple()" {
+					query = fmt.Sprintf("ALTER TABLE `%s`.`%s` ATTACH PARTITION '%s'", table.BTable.Database, table.BTable.Name, partname)
+				} else {
+					query = fmt.Sprintf("ALTER TABLE `%s`.`%s` ATTACH PARTITION %s", table.BTable.Database, table.BTable.Name, partname)
+				}
 			}
 			log.Println(query)
 			if _, err := ch.conn.Exec(query); err != nil {
 				return err
 			}
 		}
-		/*e := os.RemoveAll(partition.Path)
-		if e != nil {
-			return e
-		}*/
-
-		/*query = fmt.Sprintf("ATTACH TABLE `%s`.`%s`", table.btable.Database, table.btable.Name)
-		log.Println(query)
-		if _, err := ch.conn.Exec(query); err != nil {
-			return err
-		}*/
 	}
 	return nil
 }
