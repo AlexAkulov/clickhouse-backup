@@ -120,6 +120,11 @@ Vagrant.configure(2) do |config|
     pip3 install -U setuptools
     pip3 install -U docker-compose
 
+    # gihub actions local
+    curl https://raw.githubusercontent.com/nektos/act/master/install.sh | bash
+    # run manual
+    # act -v -r -j build -s DOCKER_REPO=<repo_name> -s DOCKER_IMAGE=clickhouse-backup -s DOCKER_USER=<docker_user> -s DOCKER_TOKEN=<docker_token> -w /vagrant
+
     systemctl restart clickhouse-server
     export DOCKER_IMAGE=alexakulov/clickhouse-backup
     # export DOCKER_IMAGE=altinity/clickhouse-backup:latest

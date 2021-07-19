@@ -21,8 +21,10 @@ require (
 	github.com/kelseyhightower/envconfig v1.4.0
 	github.com/mattn/go-colorable v0.1.6 // indirect
 	github.com/mattn/go-runewidth v0.0.7 // indirect
+	github.com/mattn/go-shellwords v1.0.12
 	github.com/mholt/archiver v1.1.3-0.20190812163345-2d1449806793
 	github.com/mholt/archiver/v3 v3.5.0
+	github.com/otiai10/copy v1.6.0
 	github.com/pierrec/lz4 v2.5.2+incompatible // indirect
 	github.com/pkg/errors v0.9.1
 	github.com/pkg/sftp v1.13.0
@@ -30,6 +32,7 @@ require (
 	github.com/stretchr/testify v1.6.1
 	github.com/tencentyun/cos-go-sdk-v5 v0.0.0-20200120023323-87ff3bc489ac
 	github.com/urfave/cli v1.22.2
+	github.com/yargevad/filepathx v1.0.0
 	golang.org/x/crypto v0.0.0-20201221181555-eec23a3978ad
 	golang.org/x/mod v0.3.0
 	golang.org/x/sync v0.0.0-20200317015054-43a5402ce75a

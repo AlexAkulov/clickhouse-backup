@@ -141,6 +141,8 @@ type ClickHouseConfig struct {
 	SkipVerify           bool              `yaml:"skip_verify" envconfig:"CLICKHOUSE_SKIP_VERIFY"`
 	SyncReplicatedTables bool              `yaml:"sync_replicated_tables" envconfig:"CLICKHOUSE_SYNC_REPLICATED_TABLES"`
 	LogSQLQueries        bool              `yaml:"log_sql_queries" envconfig:"CLICKHOUSE_LOG_SQL_QUERIES"`
+	ConfigDir            string            `yaml:"config_dir" envconfig:"CLICKHOUSE_CONFIG_DIR"`
+	RestartCommand       string            `yaml:"restart_command" evnconfig:"CLICKHOUSE_RESTART_COMMAND"`
 }
 
 type APIConfig struct {
@@ -279,6 +281,8 @@ func DefaultConfig() *Config {
 				"system.*",
 			},
 			Timeout:              "5m",
+			ConfigDir:            "/etc/clickhouse-server/",
+			RestartCommand:       "systemctl restart clickhouse-server",
 			SyncReplicatedTables: true,
 			LogSQLQueries:        false,
 		},

@@ -468,6 +468,8 @@ func (api *APIServer) httpCreateHandler(w http.ResponseWriter, r *http.Request) 
 	tablePattern := ""
 	backupName := backup.NewBackupName()
 	schemaOnly := false
+	rbac := false
+	backupConfig := false
 	fullCommand := "create"
 	query := r.URL.Query()
 	if tp, exist := query["table"]; exist {
@@ -477,6 +479,14 @@ func (api *APIServer) httpCreateHandler(w http.ResponseWriter, r *http.Request) 
 	if schema, exist := query["schema"]; exist {
 		schemaOnly, _ = strconv.ParseBool(schema[0])
 		fullCommand = fmt.Sprintf("%s --schema", fullCommand)
+	}
+	if schema, exist := query["rbac"]; exist {
+		rbac, _ = strconv.ParseBool(schema[0])
+		fullCommand = fmt.Sprintf("%s --rbac", fullCommand)
+	}
+	if schema, exist := query["backupConfig"]; exist {
+		backupConfig, _ = strconv.ParseBool(schema[0])
+		fullCommand = fmt.Sprintf("%s --backup-config", fullCommand)
 	}
 	if name, exist := query["name"]; exist {
 		backupName = name[0]
@@ -489,7 +499,7 @@ func (api *APIServer) httpCreateHandler(w http.ResponseWriter, r *http.Request) 
 		api.metrics.LastStart["create"].Set(float64(start.Unix()))
 		defer api.metrics.LastDuration["create"].Set(float64(time.Since(start).Nanoseconds()))
 		defer api.metrics.LastFinish["create"].Set(float64(time.Now().Unix()))
-		err := backup.CreateBackup(cfg, backupName, tablePattern, schemaOnly, api.clickhouseBackupVersion)
+		err := backup.CreateBackup(cfg, backupName, tablePattern, schemaOnly, rbac, backupConfig, api.clickhouseBackupVersion)
 		defer api.status.stop(err)
 		if err != nil {
 			api.metrics.FailedCounter["create"].Inc()
@@ -601,6 +611,8 @@ func (api *APIServer) httpRestoreHandler(w http.ResponseWriter, r *http.Request)
 	schemaOnly := false
 	dataOnly := false
 	dropTable := false
+	doRestoreRBAC := false
+	doRestoreConfigs := false
 	fullCommand := "restore"
 
 	query := r.URL.Query()
@@ -624,6 +636,17 @@ func (api *APIServer) httpRestoreHandler(w http.ResponseWriter, r *http.Request)
 		dropTable = true
 		fullCommand += " --rm"
 	}
+
+	if _, exist := query["do_restore_rbac"]; exist {
+		doRestoreRBAC = true
+		fullCommand += " --do-restore-rbac"
+	}
+
+	if _, exist := query["do_restore_configs"]; exist {
+		doRestoreConfigs = true
+		fullCommand += " --do-restore-configs"
+	}
+
 	name := vars["name"]
 	fullCommand = fmt.Sprintf(fullCommand, " ", name)
 
@@ -633,7 +656,7 @@ func (api *APIServer) httpRestoreHandler(w http.ResponseWriter, r *http.Request)
 		api.metrics.LastStart["restore"].Set(float64(start.Unix()))
 		defer api.metrics.LastDuration["restore"].Set(float64(time.Since(start).Nanoseconds()))
 		defer api.metrics.LastFinish["restore"].Set(float64(time.Now().Unix()))
-		err := backup.Restore(cfg, name, tablePattern, schemaOnly, dataOnly, dropTable)
+		err := backup.Restore(cfg, name, tablePattern, schemaOnly, dataOnly, dropTable, doRestoreRBAC, doRestoreConfigs)
 		api.status.stop(err)
 		if err != nil {
 			apexLog.Errorf("Download error: %+v\n", err)

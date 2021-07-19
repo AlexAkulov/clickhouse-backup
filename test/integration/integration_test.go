@@ -404,7 +404,7 @@ func TestSyncReplicaTimeout(t *testing.T) {
 	}
 	ch := &TestClickHouse{}
 	r := require.New(t)
-	r.NoError(ch.connect())
+	ch.connectWithWait(r)
 	r.NoError(dockerCP("config-s3.yml", "clickhouse:/etc/clickhouse-backup/config.yml"))
 
 	for _, table := range []string{"repl1", "repl2"} {
@@ -432,6 +432,153 @@ func TestSyncReplicaTimeout(t *testing.T) {
 
 	ch.queryWithNoError(r, "SYSTEM START REPLICATED SENDS default.repl1")
 	ch.queryWithNoError(r, "SYSTEM START FETCHES default.repl2")
+
+	ch.chbackup.Close()
+
+}
+
+func TestDoRestoreRBAC(t *testing.T) {
+	if compareVersion(os.Getenv("CLICKHOUSE_VERSION"), "20.4") == -1 {
+		t.Skipf("Test skipped, RBAC not available for %s version", os.Getenv("CLICKHOUSE_VERSION"))
+	}
+	ch := &TestClickHouse{}
+	r := require.New(t)
+
+	ch.connectWithWait(r)
+
+	r.NoError(dockerCP("config-s3.yml", "clickhouse:/etc/clickhouse-backup/config.yml"))
+	ch.queryWithNoError(r, "DROP TABLE IF EXISTS default.test_rbac")
+	ch.queryWithNoError(r, "CREATE TABLE default.test_rbac (v UInt64) ENGINE=MergeTree() ORDER BY tuple()")
+
+	ch.queryWithNoError(r, "DROP SETTINGS PROFILE  IF EXISTS test_rbac")
+	ch.queryWithNoError(r, "DROP QUOTA IF EXISTS test_rbac")
+	ch.queryWithNoError(r, "DROP ROW POLICY IF EXISTS test_rbac ON default.test_rbac")
+	ch.queryWithNoError(r, "DROP ROLE IF EXISTS test_rbac")
+	ch.queryWithNoError(r, "DROP USER IF EXISTS test_rbac")
+
+	log.Info("create RBAC related objects")
+	ch.queryWithNoError(r, "CREATE SETTINGS PROFILE test_rbac SETTINGS max_execution_time=60")
+	ch.queryWithNoError(r, "CREATE ROLE test_rbac SETTINGS PROFILE 'test_rbac'")
+	ch.queryWithNoError(r, "CREATE USER test_rbac IDENTIFIED BY 'test_rbac' DEFAULT ROLE test_rbac")
+	ch.queryWithNoError(r, "CREATE QUOTA test_rbac KEYED BY user_name FOR INTERVAL 1 hour NO LIMITS TO test_rbac")
+	ch.queryWithNoError(r, "CREATE ROW POLICY test_rbac ON default.test_rbac USING 1=1 AS RESTRICTIVE TO test_rbac")
+
+	r.NoError(dockerExec("clickhouse", "clickhouse-backup", "create", "--backup-rbac", "test_rbac_backup"))
+	r.NoError(dockerExec("clickhouse", "clickhouse-backup", "upload", "test_rbac_backup"))
+	r.NoError(dockerExec("clickhouse", "clickhouse-backup", "delete", "local", "test_rbac_backup"))
+	r.NoError(dockerExec("clickhouse", "ls", "-lah", "/var/lib/clickhouse/access"))
+
+	log.Info("drop all RBAC related objects after backup")
+	ch.queryWithNoError(r, "DROP SETTINGS PROFILE test_rbac")
+	ch.queryWithNoError(r, "DROP QUOTA test_rbac")
+	ch.queryWithNoError(r, "DROP ROW POLICY test_rbac ON default.test_rbac")
+	ch.queryWithNoError(r, "DROP ROLE test_rbac")
+	ch.queryWithNoError(r, "DROP USER test_rbac")
+	r.NoError(dockerExec("clickhouse", "ls", "-lah", "/var/lib/clickhouse/access"))
+	startTime := time.Now()
+	log.Info("restore")
+	r.NoError(dockerExec("clickhouse", "clickhouse-backup", "download", "test_rbac_backup"))
+	endTime := time.Now()
+	waitBeforeRestore := 65*time.Second - endTime.Sub(startTime)
+	log.Infof("wait %f to rebuild access/*.list", waitBeforeRestore.Seconds())
+	time.Sleep(waitBeforeRestore)
+
+	r.NoError(dockerExec("clickhouse", "clickhouse-backup", "restore", "--rm", "--do-restore-rbac", "test_rbac_backup"))
+	r.NoError(dockerExec("clickhouse", "ls", "-lah", "/var/lib/clickhouse/access"))
+
+	// we can't restart clickhouse inside container, we need restart container
+	ch.chbackup.Close()
+	_, err := execCmdOut("docker", "restart", "clickhouse")
+	r.NoError(err)
+	ch.connectWithWait(r)
+
+	r.NoError(dockerExec("clickhouse", "ls", "-lah", "/var/lib/clickhouse/access"))
+
+	rbacTypes := map[string]string{
+		"PROFILES": "test_rbac",
+		"QUOTAS":   "test_rbac",
+		"POLICIES": "test_rbac ON default.test_rbac",
+		"ROLES":    "test_rbac",
+		"USERS":    "test_rbac",
+	}
+	for rbacType, expectedValue := range rbacTypes {
+		rbacRows := []string{}
+		ch.chbackup.Select(&rbacRows, fmt.Sprintf("SHOW %s", rbacType))
+		found := false
+		for _, row := range rbacRows {
+			if row == expectedValue {
+				found = true
+				break
+			}
+		}
+		if !found {
+			r.NoError(dockerExec("clickhouse", "cat", "/var/log/clickhouse-server/clickhouse-server.log"))
+		}
+		r.Contains(rbacRows, expectedValue, "Invalid result for SHOW %s", rbacType)
+	}
+	r.NoError(dockerExec("clickhouse", "clickhouse-backup", "delete", "local", "test_rbac_backup"))
+	r.NoError(dockerExec("clickhouse", "clickhouse-backup", "delete", "remote", "test_rbac_backup"))
+
+	ch.queryWithNoError(r, "DROP SETTINGS PROFILE test_rbac")
+	ch.queryWithNoError(r, "DROP QUOTA test_rbac")
+	ch.queryWithNoError(r, "DROP ROW POLICY test_rbac ON default.test_rbac")
+	ch.queryWithNoError(r, "DROP ROLE test_rbac")
+	ch.queryWithNoError(r, "DROP USER test_rbac")
+
+	ch.chbackup.Close()
+
+}
+
+func TestDoRestoreConfigs(t *testing.T) {
+	if compareVersion(os.Getenv("CLICKHOUSE_VERSION"), "1.1.54391") == -1 {
+		t.Skipf("Test skipped, users.d is not available for %s version", os.Getenv("CLICKHOUSE_VERSION"))
+	}
+	ch := &TestClickHouse{}
+	r := require.New(t)
+	ch.connectWithWait(r)
+	ch.queryWithNoError(r, "DROP TABLE IF EXISTS default.test_rbac")
+	ch.queryWithNoError(r, "CREATE TABLE default.test_rbac (v UInt64) ENGINE=MergeTree() ORDER BY tuple()")
+
+	r.NoError(dockerCP("config-s3.yml", "clickhouse:/etc/clickhouse-backup/config.yml"))
+	r.NoError(dockerExec("clickhouse", "bash", "-c", "echo '<yandex><profiles><default><empty_result_for_aggregation_by_empty_set>1</empty_result_for_aggregation_by_empty_set></default></profiles></yandex>' > /etc/clickhouse-server/users.d/test_config.xml"))
+
+	r.NoError(dockerExec("clickhouse", "clickhouse-backup", "create", "--do-backup-configs", "test_configs_backup"))
+	r.NoError(dockerExec("clickhouse", "clickhouse-backup", "upload", "test_configs_backup"))
+	r.NoError(dockerExec("clickhouse", "clickhouse-backup", "delete", "local", "test_configs_backup"))
+
+	ch.chbackup.Close()
+	time.Sleep(2 * time.Second)
+	ch.connectWithWait(r)
+
+	settings := []string{}
+	r.NoError(ch.chbackup.Select(&settings, "SELECT value FROM system.settings WHERE name='empty_result_for_aggregation_by_empty_set'"))
+	r.Equal([]string{"1"}, settings, "expect empty_result_for_aggregation_by_empty_set=1")
+
+	r.NoError(dockerExec("clickhouse", "rm", "-rfv", "/etc/clickhouse-server/users.d/test_config.xml"))
+	r.NoError(dockerExec("clickhouse", "clickhouse-backup", "download", "test_configs_backup"))
+
+	ch.chbackup.Close()
+	time.Sleep(2 * time.Second)
+	ch.connectWithWait(r)
+
+	settings = []string{}
+	r.NoError(ch.chbackup.Select(&settings, "SELECT value FROM system.settings WHERE name='empty_result_for_aggregation_by_empty_set'"))
+	r.Equal([]string{"0"}, settings, "expect empty_result_for_aggregation_by_empty_set=0")
+
+	r.NoError(dockerExec("clickhouse", "clickhouse-backup", "restore", "--rm", "--do-restore-configs", "test_configs_backup"))
+
+	ch.chbackup.Close()
+	time.Sleep(2 * time.Second)
+	ch.connectWithWait(r)
+
+	settings = []string{}
+	r.NoError(ch.chbackup.Select(&settings, "SELECT value FROM system.settings WHERE name='empty_result_for_aggregation_by_empty_set'"))
+	r.Equal([]string{"1"}, settings, "expect empty_result_for_aggregation_by_empty_set=1")
+
+	r.NoError(dockerExec("clickhouse", "clickhouse-backup", "delete", "local", "test_configs_backup"))
+	r.NoError(dockerExec("clickhouse", "clickhouse-backup", "delete", "remote", "test_configs_backup"))
+
+	ch.chbackup.Close()
 }
 
 func testCommon(t *testing.T) {
@@ -441,16 +588,7 @@ func testCommon(t *testing.T) {
 	time.Sleep(time.Second * 5)
 	ch := &TestClickHouse{}
 	r := require.New(t)
-	for i := 1; i < 11; i++ {
-		err := ch.connect()
-		if i == 10 {
-			r.NoError(err)
-		}
-		if err != nil {
-			log.Warnf("clickhouse not ready, wait %d seconds", i*2)
-			time.Sleep(time.Second * time.Duration(i*2))
-		}
-	}
+	ch.connectWithWait(r)
 
 	log.Info("Clean before start")
 	_ = dockerExec("clickhouse", "clickhouse-backup", "delete", "remote", "test_backup")
@@ -540,6 +678,7 @@ func testCommon(t *testing.T) {
 	r.NoError(dockerExec("clickhouse", "clickhouse-backup", "delete", "remote", "increment"))
 	r.NoError(dockerExec("clickhouse", "clickhouse-backup", "delete", "local", "increment"))
 
+	ch.chbackup.Close()
 }
 
 func generateTestData(ch *TestClickHouse, r *require.Assertions) {
@@ -568,10 +707,24 @@ type TestClickHouse struct {
 	chbackup *clickhouse.ClickHouse
 }
 
+func (ch *TestClickHouse) connectWithWait(r *require.Assertions) {
+	for i := 1; i < 11; i++ {
+		err := ch.connect()
+		if i == 10 {
+			r.NoError(err)
+		}
+		if err != nil {
+			log.Warnf("clickhouse not ready %v, wait %d seconds", err, i*2)
+			r.NoError(execCmd("docker", "ps", "-a"))
+			time.Sleep(time.Second * time.Duration(i*2))
+		}
+	}
+}
+
 func (ch *TestClickHouse) connect() error {
 	ch.chbackup = &clickhouse.ClickHouse{
 		Config: &config.ClickHouseConfig{
-			Host:    "localhost",
+			Host:    "127.0.0.1",
 			Port:    9000,
 			Timeout: "5m",
 		},
@@ -702,22 +855,32 @@ func (ch *TestClickHouse) queryWithNoError(r *require.Assertions, query string, 
 
 func dockerExec(container string, cmd ...string) error {
 	out, err := dockerExecOut(container, cmd...)
-	log.Debug(out)
+	log.Info(out)
 	return err
 }
 
 func dockerExecOut(container string, cmd ...string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	dcmd := []string{"exec", container}
 	dcmd = append(dcmd, cmd...)
-	log.Infof("docker %s", strings.Join(dcmd, " "))
-	out, err := exec.CommandContext(ctx, "docker", dcmd...).CombinedOutput()
+	return execCmdOut("docker", dcmd...)
+}
+
+func execCmd(cmd string, args ...string) error {
+	out, err := execCmdOut(cmd, args...)
+	log.Info(string(out))
+	return err
+}
+
+func execCmdOut(cmd string, args ...string) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
+	log.Infof("%s %s", cmd, strings.Join(args, " "))
+	out, err := exec.CommandContext(ctx, cmd, args...).CombinedOutput()
 	cancel()
 	return string(out), err
 }
 
 func dockerCP(src, dst string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	dcmd := []string{"cp", src, dst}
 	log.Infof("docker %s", strings.Join(dcmd, " "))
 	out, err := exec.CommandContext(ctx, "docker", dcmd...).CombinedOutput()

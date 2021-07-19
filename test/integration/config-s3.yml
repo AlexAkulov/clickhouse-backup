@@ -2,13 +2,14 @@ general:
   disable_progress_bar: true
   remote_storage: s3
 clickhouse:
-  host: localhost
+  host: 127.0.0.1
   port: 9440
   username: backup
   password: meow=& 123?*%# МЯУ
   secure: true
   skip_verify: true
   timeout: 1s
+  restart_command: bash -c 'echo "FAKE RESTART"'
 s3:
   access_key: access-key
   secret_key: it-is-my-super-secret-key

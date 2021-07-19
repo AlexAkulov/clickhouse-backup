@@ -2,7 +2,7 @@ general:
   disable_progress_bar: true
   remote_storage: gcs
 clickhouse:
-  host: localhost
+  host: 127.0.0.1
   port: 9000
 gcs:
   bucket: clickhouse-backup-test-gcs

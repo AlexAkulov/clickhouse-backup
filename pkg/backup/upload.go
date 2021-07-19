@@ -14,8 +14,8 @@ import (
 	"github.com/AlexAkulov/clickhouse-backup/pkg/clickhouse"
 	"github.com/AlexAkulov/clickhouse-backup/pkg/metadata"
 	"github.com/AlexAkulov/clickhouse-backup/utils"
-
 	apexLog "github.com/apex/log"
+	"github.com/yargevad/filepathx"
 )
 
 func (b *Backuper) Upload(backupName string, tablePattern string, diffFrom string, schemaOnly bool) error {
@@ -24,7 +24,7 @@ func (b *Backuper) Upload(backupName string, tablePattern string, diffFrom strin
 		return nil
 	}
 	if backupName == "" {
-		PrintLocalBackups(b.cfg, "all")
+		_ = PrintLocalBackups(b.cfg, "all")
 		return fmt.Errorf("select backup for upload")
 	}
 	if backupName == diffFrom {
@@ -122,8 +122,17 @@ func (b *Backuper) Upload(backupName string, tablePattern string, diffFrom strin
 			WithField("size", utils.FormatBytes(uploadedBytes+tableMetadataSize)).
 			Info("done")
 	}
+	// upload rbac for backup
+	if backupMetadata.RBACSize, err = b.uploadRBACData(backupName); err != nil {
+		return err
+	}
 
-	// заливаем метадату для бэкапа
+	// upload configs for backup
+	if backupMetadata.ConfigSize, err = b.uploadConfigData(backupName); err != nil {
+		return err
+	}
+
+	// upload metadata for backup
 	backupMetadata.CompressedSize = compressedDataSize
 	backupMetadata.MetadataSize = metadataSize
 	tt := []metadata.TableTitle{}
@@ -150,7 +159,7 @@ func (b *Backuper) Upload(backupName string, tablePattern string, diffFrom strin
 	}
 	log.
 		WithField("duration", utils.HumanizeDuration(time.Since(startUpload))).
-		WithField("size", utils.FormatBytes(compressedDataSize+metadataSize+int64(len(newBackupMetadataBody)))).
+		WithField("size", utils.FormatBytes(compressedDataSize+metadataSize+int64(len(newBackupMetadataBody))+backupMetadata.RBACSize+backupMetadata.ConfigSize)).
 		Info("done")
 
 	// Clean
@@ -158,6 +167,44 @@ func (b *Backuper) Upload(backupName string, tablePattern string, diffFrom strin
 		return fmt.Errorf("can't remove old backups on remote storage: %v", err)
 	}
 	return nil
+}
+
+func (b *Backuper) uploadConfigData(backupName string) (int64, error) {
+	configBackupPath := path.Join(b.DefaultDataPath, "backup", backupName, "configs")
+	configFilesGlobPattern := path.Join(configBackupPath, "**/*.*")
+	remoteConfigsArchive := path.Join(backupName, fmt.Sprintf("configs.%s", b.cfg.GetArchiveExtension()))
+	return b.uploadAndArchiveBackupRelatedDir(configBackupPath, configFilesGlobPattern, remoteConfigsArchive)
+
+}
+
+func (b *Backuper) uploadRBACData(backupName string) (int64, error) {
+	rbacBackupPath := path.Join(b.DefaultDataPath, "backup", backupName, "access")
+	accessFilesGlobPattern := path.Join(rbacBackupPath, "*.*")
+	remoteRBACArchive := path.Join(backupName, fmt.Sprintf("access.%s", b.cfg.GetArchiveExtension()))
+	return b.uploadAndArchiveBackupRelatedDir(rbacBackupPath, accessFilesGlobPattern, remoteRBACArchive)
+}
+
+func (b *Backuper) uploadAndArchiveBackupRelatedDir(localBackupRelatedDir, localFilesGlobPattern, remoteFile string) (int64, error) {
+	if _, err := os.Stat(localBackupRelatedDir); os.IsNotExist(err) {
+		return 0, nil
+	}
+	var localFiles []string
+	var err error
+	if localFiles, err = filepathx.Glob(localFilesGlobPattern); err != nil || localFiles == nil || len(localFiles) == 0 {
+		return 0, fmt.Errorf("list %s return list=%v with err=%v", localFilesGlobPattern, localFiles, err)
+	}
+	for i := range localFiles {
+		localFiles[i] = strings.Replace(localFiles[i], localBackupRelatedDir, "", 1)
+	}
+
+	if err := b.dst.CompressedStreamUpload(localBackupRelatedDir, localFiles, remoteFile); err != nil {
+		return 0, fmt.Errorf("can't RBAC upload: %v", err)
+	}
+	remoteUploaded, err := b.dst.StatFile(remoteFile)
+	if err != nil {
+		return 0, fmt.Errorf("can't check uploaded %s file: %v", remoteFile, err)
+	}
+	return remoteUploaded.Size(), nil
 }
 
 func (b *Backuper) uploadTableData(backupName string, table metadata.TableMetadata) (map[string][]string, int64, error) {

@@ -18,6 +18,7 @@ import (
 
 	apexLog "github.com/apex/log"
 )
+
 var (
 	ErrBackupIsAlreadyExists = errors.New("backup is already exists")
 )
@@ -51,7 +52,7 @@ func (b *Backuper) Download(backupName string, tablePattern string, schemaOnly b
 		return fmt.Errorf("remote storage is 'none'")
 	}
 	if backupName == "" {
-		PrintRemoteBackups(b.cfg, "all")
+		_ = PrintRemoteBackups(b.cfg, "all")
 		return fmt.Errorf("select backup for download")
 	}
 	localBackups, err := GetLocalBackups(b.cfg)
@@ -128,9 +129,12 @@ func (b *Backuper) Download(backupName string, tablePattern string, schemaOnly b
 		if err != nil {
 			return err
 		}
-		tmReader.Close()
+		err = tmReader.Close()
+		if err != nil {
+			return err
+		}
 		var tableMetadata metadata.TableMetadata
-		if err := json.Unmarshal(tmBody, &tableMetadata); err != nil {
+		if err = json.Unmarshal(tmBody, &tableMetadata); err != nil {
 			return err
 		}
 		tableMetadataForDownload = append(tableMetadataForDownload, tableMetadata)
@@ -169,6 +173,16 @@ func (b *Backuper) Download(backupName string, tablePattern string, schemaOnly b
 				Info("done")
 		}
 	}
+	rbacSize, err := b.downloadRBACData(remoteBackup)
+	if err != nil {
+		return fmt.Errorf("download RBAC error: %v", err)
+	}
+
+	configSize, err := b.downloadConfigData(remoteBackup)
+	if err != nil {
+		return fmt.Errorf("download CONFIGS error: %v", err)
+	}
+
 	backupMetadata := remoteBackup.BackupMetadata
 	backupMetadata.Tables = tablesForDownload
 	backupMetadata.DataSize = dataSize
@@ -176,6 +190,8 @@ func (b *Backuper) Download(backupName string, tablePattern string, schemaOnly b
 	backupMetadata.CompressedSize = 0
 	backupMetadata.DataFormat = ""
 	backupMetadata.RequiredBackup = ""
+	backupMetadata.ConfigSize = configSize
+	backupMetadata.RBACSize = rbacSize
 
 	backupMetafileLocalPath := path.Join(b.DefaultDataPath, "backup", backupName, "metadata.json")
 	if err := backupMetadata.Save(backupMetafileLocalPath); err != nil {
@@ -183,9 +199,31 @@ func (b *Backuper) Download(backupName string, tablePattern string, schemaOnly b
 	}
 	log.
 		WithField("duration", utils.HumanizeDuration(time.Since(startDownload))).
-		WithField("size", utils.FormatBytes(dataSize+metadataSize)).
+		WithField("size", utils.FormatBytes(dataSize+metadataSize+rbacSize+configSize)).
 		Info("done")
 	return nil
+}
+
+func (b *Backuper) downloadRBACData(remoteBackup new_storage.Backup) (int64, error) {
+	return b.downloadBackupRelatedDir(remoteBackup, "access")
+}
+
+func (b *Backuper) downloadConfigData(remoteBackup new_storage.Backup) (int64, error) {
+	return b.downloadBackupRelatedDir(remoteBackup, "configs")
+}
+
+func (b *Backuper) downloadBackupRelatedDir(remoteBackup new_storage.Backup, prefix string) (int64, error) {
+	archiveFile := fmt.Sprintf("%s.%s", prefix, b.cfg.GetArchiveExtension())
+	remoteFile := path.Join(remoteBackup.BackupName, archiveFile)
+	localDir := path.Join(b.DefaultDataPath, "backup", remoteBackup.BackupName, prefix)
+	remoteFileInfo, err := b.dst.StatFile(remoteFile)
+	if err != nil {
+		return 0, nil
+	}
+	if err = b.dst.CompressedStreamDownload(remoteFile, localDir); err != nil {
+		return 0, err
+	}
+	return remoteFileInfo.Size(), nil
 }
 
 func (b *Backuper) downloadTableData(remoteBackup metadata.BackupMetadata, table metadata.TableMetadata) error {
@@ -211,7 +249,7 @@ func (b *Backuper) downloadTableData(remoteBackup metadata.BackupMetadata, table
 			}
 		}
 	}
-	// Create symlink for exsists parts
+	// Create symlink for exists parts
 	for disk, parts := range table.Parts {
 		for _, p := range parts {
 			if !p.Required {

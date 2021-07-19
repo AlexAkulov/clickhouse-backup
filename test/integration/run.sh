@@ -13,10 +13,11 @@ else
 fi
 
 docker-compose -f test/integration/${COMPOSE_FILE} down --remove-orphans
+docker volume prune -f
 make clean
 make build
 docker-compose -f test/integration/${COMPOSE_FILE} up -d --force-recreate
-
+sleep 5
 # To run integration tests including GCS tests set GCS_TESTS environment variable:
 # GCS_TESTS=true go test -tags=integration -v test/integration/integration_test.go
-go test -failfast -tags=integration -v test/integration/integration_test.go
+go test  -timeout 30m -failfast -tags=integration -run "${RUN_TESTS:-.+}" -v test/integration/integration_test.go
