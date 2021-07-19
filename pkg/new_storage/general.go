@@ -171,6 +171,93 @@ func (bd *BackupDestination) BackupList() ([]Backup, error) {
 	return result, err
 }
 
+// use this function only for gcs
+func (bd *BackupDestination) BackupFolderList(backupFolderName string, remoteStorage string) ([]Backup, error) {
+	if remoteStorage != "gcs" {
+		return bd.BackupList()
+	}
+	result := []Backup{}
+	err := bd.Walk(backupFolderName, false, func(o RemoteFile) error {
+		// Legacy backup
+		if ok, backupName, fileExtension := isLegacyBackup(strings.TrimPrefix(o.Name(), "/")); ok {
+			result = append(result, Backup{
+				metadata.BackupMetadata{
+					BackupName: backupName,
+					DataSize:   o.Size(),
+				},
+				true,
+				fileExtension,
+				"",
+				o.LastModified(),
+			})
+			return nil
+		}
+		mf, err := bd.StatFile(path.Join(o.Name(), "metadata.json"))
+		if err != nil {
+			result = append(result, Backup{
+				metadata.BackupMetadata{
+					BackupName: strings.Trim(o.Name(), "/"),
+				},
+				false,
+				"",
+				"broken (can't stat metadata.json)",
+				o.LastModified(), // folder
+			})
+			return nil
+		}
+		r, err := bd.GetFileReader(path.Join(o.Name(), "metadata.json"))
+		if err != nil {
+			result = append(result, Backup{
+				metadata.BackupMetadata{
+					BackupName: strings.Trim(o.Name(), "/"),
+				},
+				false,
+				"",
+				"broken (not found metadata.json)",
+				o.LastModified(), // folder
+			})
+			return nil
+		}
+		b, err := ioutil.ReadAll(r)
+		if err != nil {
+			result = append(result, Backup{
+				metadata.BackupMetadata{
+					BackupName: strings.Trim(o.Name(), "/"),
+				},
+				false,
+				"",
+				"broken (can't get metadata.json)",
+				o.LastModified(), // folder
+			})
+			return nil
+		}
+		if err := r.Close(); err != nil { // Never use defer in loops
+			return err
+		}
+		var m metadata.BackupMetadata
+		if err := json.Unmarshal(b, &m); err != nil {
+			result = append(result, Backup{
+				metadata.BackupMetadata{
+					BackupName: strings.Trim(o.Name(), "/"),
+				},
+				false,
+				"",
+				"broken (bad metadata.json)",
+				o.LastModified(), // folder
+			})
+			return nil
+		}
+		result = append(result, Backup{
+			m, false, "", "", mf.LastModified(),
+		})
+		return nil
+	})
+	sort.SliceStable(result, func(i, j int) bool {
+		return result[i].UploadDate.Before(result[j].UploadDate)
+	})
+	return result, err
+}
+
 func (bd *BackupDestination) CompressedStreamDownload(remotePath string, localPath string) error {
 	if err := os.MkdirAll(localPath, 0750); err != nil {
 		return err

@@ -71,7 +71,9 @@ func (b *Backuper) Download(backupName string, tablePattern string, schemaOnly b
 	if err := b.init(); err != nil {
 		return err
 	}
-	remoteBackups, err := b.dst.BackupList()
+
+	// fix for gcs
+	remoteBackups, err := b.dst.BackupFolderList(backupName, b.cfg.General.RemoteStorage)
 	if err != nil {
 		return err
 	}
